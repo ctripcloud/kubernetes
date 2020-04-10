@@ -27,6 +27,7 @@ import (
 	"unicode/utf8"
 
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metainternalversionscheme "k8s.io/apimachinery/pkg/apis/meta/internalversion/scheme"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/validation"
@@ -138,13 +139,18 @@ func createHandler(r rest.NamedCreater, scope *RequestScope, admit admission.Int
 			_, name, _ = scope.Namer.ObjectName(obj)
 		}
 		admissionAttributes := admission.NewAttributesRecord(obj, nil, scope.Kind, namespace, name, scope.Resource, scope.Subresource, admission.Create, options, dryrun.IsDryRun(options.DryRun), userInfo)
-		if mutatingAdmission, ok := admit.(admission.MutationInterface); ok && mutatingAdmission.Handles(admission.Create) {
-			err = mutatingAdmission.Admit(ctx, admissionAttributes, scope)
-			if err != nil {
-				scope.err(err, w, req)
-				return
+		genAttr := func(newobj, oldobj runtime.Object) admission.Attributes {
+			// in case the generated name is populated
+			if len(name) == 0 {
+				if metadata, err := meta.Accessor(obj); err == nil {
+					name = metadata.GetName()
+				}
 			}
+
+			return admission.NewAttributesRecord(obj, nil, scope.Kind, namespace, name, scope.Resource, scope.Subresource, admission.Create, options, dryrun.IsDryRun(options.DryRun), userInfo)
 		}
+
+		ctx = rest.WithMutateObjectFunc(ctx, rest.AdmissionToMutateObjectFunc(admit, genAttr, scope))
 
 		if scope.FieldManager != nil {
 			liveObj, err := scope.Creater.New(scope.Kind)
